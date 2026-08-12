@@ -42,9 +42,7 @@
 <main>
   <div class="controls">
     <button id="connect">🔗 Connecter</button>
-    <button id="start" disabled>▶ Demarrer</button>
-    <button id="stop" disabled>⏸ Arreter</button>
-    <button id="reset" disabled>↺ Reset</button>
+    <button id="reset">↺ Reset</button>
     <button id="demo">🧪 Demo</button>
   </div>
   <div class="readout">
@@ -64,16 +62,20 @@
 
 <script>
 "use strict";
-const SVC   = 'a9e6f000-5b8c-4f4a-8b3a-1c2d3e4f5a6b';
-const CH_DATA = 'a9e6f001-5b8c-4f4a-8b3a-1c2d3e4f5a6b';
-const CH_CMD  = 'a9e6f002-5b8c-4f4a-8b3a-1c2d3e4f5a6b';
-const CH_STAT = 'a9e6f003-5b8c-4f4a-8b3a-1c2d3e4f5a6b';
+const SVC    = '8b9d0001-8d4c-4f3a-9b1a-2c3d4e5f6a7b';
+const CH_DATA = '8b9d0002-8d4c-4f3a-9b1a-2c3d4e5f6a7b';  // trame NOTIFY (CSV 15 champs)
+
+// Protocole ExAOlib (serveur ble_sensors.py), trame CSV :
+//   ax,ay,az,gx,gy,gz,mx,my,mz,dist,press,pt,ht,tt,lum
+// MVP = distance(ToF) + acceleration + rotation (IMU). Les autres capteurs
+// (mag, pression, temp, hum, lumiere) sont volontairement ignores ici.
 
 const MAXPTS = 20000;
 const WINDOW_MS = 60000;
 
-let device, server, svc, chData, chCmd, chStat;
+let device, server, svc, chData;
 let connected = false;
+let _t0 = 0;
 const buf = { t:[], dist:[], ax:[], ay:[], az:[], gx:[], gy:[], gz:[] };
 let demoT = null;
 
@@ -162,28 +164,33 @@ function pushPoint(t, d, ax, ay, az, gx, gy, gz){
 function onData(e){
   const s = new TextDecoder().decode(e.target.value);
   const p = s.trim().split(',');
-  if (p.length < 8) return;
-  const t = +p[0], d = +p[1], ax = +p[2], ay = +p[3], az = +p[4], gx = +p[5], gy = +p[6], gz = +p[7];
-  if ([t, d, ax, ay, az, gx, gy, gz].some(v => Number.isNaN(v))) return;
+  if (p.length < 15) return;
+  const ax = +p[0], ay = +p[1], az = +p[2];
+  const gx = +p[3], gy = +p[4], gz = +p[5];
+  const d  = +p[9];                       // VL53L1X distance (mm)
+  const vals = [ax, ay, az, gx, gy, gz, d];
+  if (vals.some(v => Number.isNaN(v))) return;
+  const t = (performance.now() - _t0).toFixed(0) | 0;
   pushPoint(t, d, ax, ay, az, gx, gy, gz);
 }
 
 async function connect(){
   try {
-    log('Recherche STeaMi-Motion…');
-    device = await navigator.bluetooth.requestDevice({ filters:[{ services:[SVC] }], optionalServices:[SVC] });
+    log('Recherche ExAOlib (STeaMi)…');
+    device = await navigator.bluetooth.requestDevice({
+      filters:[{ services:[SVC] }], optionalServices:[SVC]
+    });
     device.addEventListener('gattserverdisconnected', onDisconnect);
     server = await device.gatt.connect();
     svc = await server.getPrimaryService(SVC);
     chData = await svc.getCharacteristic(CH_DATA);
-    chCmd = await svc.getCharacteristic(CH_CMD);
-    chStat = await svc.getCharacteristic(CH_STAT);
     await chData.startNotifications();
     chData.addEventListener('characteristicvaluechanged', onData);
+    _t0 = performance.now();
     connected = true;
     $('status').textContent = 'connecte';
-    ['start','stop','reset','export'].forEach(id => $(id).disabled = false);
-    log('Connecte : ' + (device.name || 'STeaMi-Motion'));
+    ['export'].forEach(id => $(id).disabled = false);
+    log('Connecte : ' + (device.name || 'ExAOlib') + ' (acquisition 5 Hz)');
   } catch (e){
     log('Erreur connexion : ' + e);
   }
@@ -193,14 +200,8 @@ function onDisconnect(){
   connected = false;
   $('status').textContent = 'deconnecte';
   $('connect').textContent = '🔗 Connecter';
-  ['start','stop','reset','export'].forEach(id => $(id).disabled = true);
+  ['export'].forEach(id => $(id).disabled = true);
   log('Deconnecte.');
-}
-
-async function sendCmd(cmd){
-  if (!chCmd) { log('Non connecte'); return; }
-  try { await chCmd.writeValue(new TextEncoder().encode(cmd)); }
-  catch (e){ log('Commande ' + cmd + ' echouee : ' + e); }
 }
 
 function resetBuffers(){
@@ -243,9 +244,7 @@ function toggleDemo(){
 }
 
 $('connect').onclick = connect;
-$('start').onclick = () => { sendCmd('START'); log('START envoye.'); };
-$('stop').onclick  = () => { sendCmd('STOP');  log('STOP envoye.'); };
-$('reset').onclick = () => { sendCmd('RESET'); resetBuffers(); log('Reset.'); };
+$('reset').onclick = () => { resetBuffers(); log('Reset.'); };
 $('export').onclick = exportCSV;
 $('demo').onclick = toggleDemo;
 
