@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>STeaMi Motion Lab</title>
+<style>
+  :root { color-scheme: dark; --bg:#0b1020; --panel:#121a30; --acc:#36c2ff; --ok:#46e08a; --warn:#ffcf5c; --err:#ff6b6b; }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  body { margin:0; font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+         background:var(--bg); color:#e8eefc; }
+  header { padding:10px 14px; background:var(--panel); display:flex; align-items:center; gap:10px; }
+  header h1 { font-size:15px; margin:0; flex:1; }
+  #status { font-size:13px; padding:4px 10px; border-radius:999px; background:#1c294a; }
+  #banner { display:none; background:var(--warn); color:#1a1300; padding:8px 14px; font-size:13px; }
+  main { padding:12px; max-width:760px; margin:0 auto; }
+  .controls { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:10px; }
+  button { flex:1 1 auto; min-width:110px; font-size:15px; font-weight:600; padding:13px 10px;
+           border:0; border-radius:12px; background:var(--panel); color:#e8eefc; }
+  button:disabled { opacity:.4; }
+  #connect { background:var(--acc); color:#022; }
+  #start { background:var(--ok); color:#022; }
+  #stop  { background:var(--warn); color:#220; }
+  #export{ background:#3a4d80; }
+  .readout { display:flex; gap:12px; margin:6px 2px 12px; font-variant-numeric:tabular-nums; }
+  .readout span { background:var(--panel); padding:10px 14px; border-radius:12px; flex:1; text-align:center; }
+  .readout b { display:block; font-size:11px; opacity:.6; font-weight:500; }
+  .readout .v { font-size:22px; }
+  .chart { background:var(--panel); border-radius:14px; padding:8px 8px 4px; margin-bottom:12px; }
+  .chart h3 { margin:4px 6px; font-size:13px; font-weight:600; opacity:.85; }
+  canvas { width:100%; height:150px; display:block; border-radius:10px; }
+  #log { background:#070b16; color:#9fb3e0; font-size:11px; padding:8px; border-radius:10px;
+         max-height:120px; overflow:auto; white-space:pre-wrap; margin-top:8px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>STeaMi Motion Lab</h1>
+  <span id="status">deconnecte</span>
+</header>
+<div id="banner"></div>
+<main>
+  <div class="controls">
+    <button id="connect">🔗 Connecter</button>
+    <button id="start" disabled>▶ Demarrer</button>
+    <button id="stop" disabled>⏸ Arreter</button>
+    <button id="reset" disabled>↺ Reset</button>
+    <button id="demo">🧪 Demo</button>
+  </div>
+  <div class="readout">
+    <span><b>chrono</b><span class="v" id="chrono">0.0 s</span></span>
+    <span><b>distance</b><span class="v" id="dist">— mm</span></span>
+  </div>
+
+  <section class="chart"><h3>Distance au mur — x(t)</h3><canvas id="cDist"></canvas></section>
+  <section class="chart"><h3>Acceleration — |a|(t)</h3><canvas id="cAcc"></canvas></section>
+  <section class="chart"><h3>Rotation — |ω|(t)</h3><canvas id="cGyro"></canvas></section>
+
+  <div class="controls">
+    <button id="export" disabled>⬇ Exporter CSV</button>
+  </div>
+  <pre id="log"></pre>
+</main>
+
+<script>
+"use strict";
+const SVC   = 'a9e6f000-5b8c-4f4a-8b3a-1c2d3e4f5a6b';
+const CH_DATA = 'a9e6f001-5b8c-4f4a-8b3a-1c2d3e4f5a6b';
+const CH_CMD  = 'a9e6f002-5b8c-4f4a-8b3a-1c2d3e4f5a6b';
+const CH_STAT = 'a9e6f003-5b8c-4f4a-8b3a-1c2d3e4f5a6b';
+
+const MAXPTS = 20000;
+const WINDOW_MS = 60000;
+
+let device, server, svc, chData, chCmd, chStat;
+let connected = false;
+const buf = { t:[], dist:[], ax:[], ay:[], az:[], gx:[], gy:[], gz:[] };
+let demoT = null;
+
+const $ = id => document.getElementById(id);
+function log(m){ const el = $('log'); el.textContent = (m + '\n') + el.textContent; }
+
+function checkEnv(){
+  const b = $('banner');
+  if (!navigator.bluetooth){
+    b.style.display = 'block';
+    b.textContent = '⚠ Web Bluetooth indisponible : ouvrez cette page dans Chrome sur Android.';
+    $('connect').disabled = true;
+    return;
+  }
+  if (!window.isSecureContext){
+    b.style.display = 'block';
+    b.textContent = '⚠ Contexte non sécurisé : servez la page en HTTPS (GitHub Pages / Netlify) ou via localhost. Le BLE ne fonctionne pas en file://.';
+  }
+}
+
+class Strip {
+  constructor(id, color, label){
+    this.cv = $(id); this.ctx = this.cv.getContext('2d');
+    this.color = color; this.label = label;
+    this.t = []; this.v = [];
+    this.resize();
+    window.addEventListener('resize', () => this.resize());
+  }
+  resize(){
+    const dpr = window.devicePixelRatio || 1;
+    const r = this.cv.getBoundingClientRect();
+    this.cv.width = Math.max(1, r.width * dpr);
+    this.cv.height = Math.max(1, r.height * dpr);
+    this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    this.w = r.width; this.h = r.height;
+  }
+  push(t, v){ this.t.push(t); this.v.push(v); if (this.t.length > MAXPTS){ this.t.shift(); this.v.shift(); } }
+  draw(xmin, xmax){
+    const c = this.ctx, W = this.w, H = this.h;
+    c.fillStyle = '#0b1020'; c.fillRect(0, 0, W, H);
+    if (this.t.length < 2) return;
+    let ymin = Infinity, ymax = -Infinity;
+    for (const y of this.v){ if (y < ymin) ymin = y; if (y > ymax) ymax = y; }
+    if (ymin === ymax){ ymin -= 1; ymax += 1; }
+    const pad = (ymax - ymin) * 0.1; ymin -= pad; ymax += pad;
+    const X = t => (t - xmin) / (xmax - xmin) * W;
+    const Y = v => H - (v - ymin) / (ymax - ymin) * H;
+    c.strokeStyle = '#1f2a44'; c.lineWidth = 1;
+    c.beginPath(); c.moveTo(0, Y(0)); c.lineTo(W, Y(0)); c.stroke();
+    c.strokeStyle = this.color; c.lineWidth = 2; c.beginPath();
+    for (let i = 0; i < this.t.length; i++){
+      const x = X(this.t[i]), y = Y(this.v[i]);
+      if (i === 0) c.moveTo(x, y); else c.lineTo(x, y);
+    }
+    c.stroke();
+    c.fillStyle = this.color; c.font = '12px sans-serif'; c.fillText(this.label, 6, 14);
+    c.fillStyle = '#7a89b0'; c.fillText(ymin.toFixed(1) + ' … ' + ymax.toFixed(1), 6, H - 6);
+  }
+}
+
+const stripDist = new Strip('cDist', '#36c2ff', 'distance (mm)');
+const stripAcc  = new Strip('cAcc',  '#46e08a', '|a| (g)');
+const stripGyro = new Strip('cGyro', '#ffcf5c', '|ω| (°/s)');
+
+function drawAll(){
+  const n = stripDist.t.length; if (!n) return;
+  let xmax = stripDist.t[n - 1];
+  let xmin = xmax - WINDOW_MS;
+  if (xmin < stripDist.t[0]) xmin = stripDist.t[0];
+  stripDist.draw(xmin, xmax);
+  stripAcc.draw(xmin, xmax);
+  stripGyro.draw(xmin, xmax);
+}
+
+function pushPoint(t, d, ax, ay, az, gx, gy, gz){
+  if (buf.t.length >= MAXPTS){ for (const k in buf) buf[k].shift(); }
+  buf.t.push(t); buf.dist.push(d); buf.ax.push(ax); buf.ay.push(ay); buf.az.push(az);
+  buf.gx.push(gx); buf.gy.push(gy); buf.gz.push(gz);
+  $('dist').textContent = d + ' mm';
+  $('chrono').textContent = (t / 1000).toFixed(1) + ' s';
+  const a = Math.hypot(ax, ay, az), w = Math.hypot(gx, gy, gz);
+  stripDist.push(t, d); stripAcc.push(t, a); stripGyro.push(t, w);
+  if (buf.t.length % 2 === 0) drawAll();
+}
+
+function onData(e){
+  const s = new TextDecoder().decode(e.target.value);
+  const p = s.trim().split(',');
+  if (p.length < 8) return;
+  const t = +p[0], d = +p[1], ax = +p[2], ay = +p[3], az = +p[4], gx = +p[5], gy = +p[6], gz = +p[7];
+  if ([t, d, ax, ay, az, gx, gy, gz].some(v => Number.isNaN(v))) return;
+  pushPoint(t, d, ax, ay, az, gx, gy, gz);
+}
+
+async function connect(){
+  try {
+    log('Recherche STeaMi-Motion…');
+    device = await navigator.bluetooth.requestDevice({ filters:[{ services:[SVC] }], optionalServices:[SVC] });
+    device.addEventListener('gattserverdisconnected', onDisconnect);
+    server = await device.gatt.connect();
+    svc = await server.getPrimaryService(SVC);
+    chData = await svc.getCharacteristic(CH_DATA);
+    chCmd = await svc.getCharacteristic(CH_CMD);
+    chStat = await svc.getCharacteristic(CH_STAT);
+    await chData.startNotifications();
+    chData.addEventListener('characteristicvaluechanged', onData);
+    connected = true;
+    $('status').textContent = 'connecte';
+    ['start','stop','reset','export'].forEach(id => $(id).disabled = false);
+    log('Connecte : ' + (device.name || 'STeaMi-Motion'));
+  } catch (e){
+    log('Erreur connexion : ' + e);
+  }
+}
+
+function onDisconnect(){
+  connected = false;
+  $('status').textContent = 'deconnecte';
+  $('connect').textContent = '🔗 Connecter';
+  ['start','stop','reset','export'].forEach(id => $(id).disabled = true);
+  log('Deconnecte.');
+}
+
+async function sendCmd(cmd){
+  if (!chCmd) { log('Non connecte'); return; }
+  try { await chCmd.writeValue(new TextEncoder().encode(cmd)); }
+  catch (e){ log('Commande ' + cmd + ' echouee : ' + e); }
+}
+
+function resetBuffers(){
+  for (const k in buf) buf[k] = [];
+  stripDist.t = []; stripDist.v = []; stripAcc.t = []; stripAcc.v = []; stripGyro.t = []; stripGyro.v = [];
+  $('chrono').textContent = '0.0 s'; $('dist').textContent = '— mm';
+  drawAll();
+}
+
+function exportCSV(){
+  if (!buf.t.length){ log('Rien a exporter.'); return; }
+  let csv = 't_ms,distance_mm,ax_g,ay_g,az_g,gx_dps,gy_dps,gz_dps\n';
+  for (let i = 0; i < buf.t.length; i++){
+    csv += buf.t[i] + ',' + buf.dist[i] + ',' + buf.ax[i] + ',' + buf.ay[i] + ',' +
+           buf.az[i] + ',' + buf.gx[i] + ',' + buf.gy[i] + ',' + buf.gz[i] + '\n';
+  }
+  const blob = new Blob([csv], { type:'text/csv' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'steami_motion_' + Date.now() + '.csv';
+  a.click();
+  URL.revokeObjectURL(a.href);
+  log('CSV exporte (' + buf.t.length + ' points).');
+}
+
+// Mode demo : genere des courbes realistes sans la carte (pour tester l'UI)
+function toggleDemo(){
+  if (demoT){ clearInterval(demoT); demoT = null; log('Demo arretee.'); return; }
+  if (connected){ log('Deconnectez la STeaMi pour utiliser la demo.'); return; }
+  log('Demo demarree (sans STeaMi).');
+  let t = 0;
+  demoT = setInterval(() => {
+    t += 50;
+    const d = 600 + 300 * Math.sin(t / 1000) + (Math.random() * 10 - 5);
+    const ax = 0.25 * Math.sin(t / 500) + (Math.random() * 0.02 - 0.01);
+    const ay = 0.05, az = 1.0 + 0.05 * Math.sin(t / 700);
+    const gx = 40 * Math.max(0, Math.sin(t / 800)), gy = 0, gz = 15 * Math.cos(t / 600);
+    pushPoint(t, Math.round(d), ax, ay, az, gx, gy, gz);
+  }, 50);
+}
+
+$('connect').onclick = connect;
+$('start').onclick = () => { sendCmd('START'); log('START envoye.'); };
+$('stop').onclick  = () => { sendCmd('STOP');  log('STOP envoye.'); };
+$('reset').onclick = () => { sendCmd('RESET'); resetBuffers(); log('Reset.'); };
+$('export').onclick = exportCSV;
+$('demo').onclick = toggleDemo;
+
+checkEnv();
+log('Pret. Connectez la STeaMi ou lancez la Demo.');
+</script>
+</body>
+</html>
