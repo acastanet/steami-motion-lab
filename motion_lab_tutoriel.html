@@ -41,7 +41,7 @@
 <section>
   <h2>1. Matériel</h2>
   <ul>
-    <li>Une carte <b>STeaMi</b> (firmware MicroPython avec les drivers <code>ism330dl</code>, <code>vl53l1x</code>, <code>ssd1327</code>).</li>
+    <li>Une carte <b>STeaMi</b> avec le serveur BLE <code>motion_lab_server.py</code> (firmware MicroPython + drivers <code>ism330dl</code>, <code>vl53l1x</code>, <code>lis2mdl</code>, <code>wsen_pads</code>, <code>wsen_hids</code>, <code>apds_native</code>, <code>ssd1327</code>).</li>
     <li>Un smartphone <b>Android</b> avec <b>Chrome</b> récent (Web Bluetooth, Android ≥ 6.0).</li>
     <li>Un petit chariot / voiture-jouet, une surface plane, un mur ou une plaque verticale.</li>
     <li>Éventuellement une <b>boîte opaque</b> pour le défi « boîte noire ».</li>
@@ -51,39 +51,48 @@
 
 <section>
   <h2>2. Installer le serveur BLE sur la STeaMi</h2>
-  <p>Copiez <code>motion_lab_server.py</code> vers <code>main.py</code> sur la carte (il démarre automatiquement).</p>
-  <pre># Windows
+  <p>Copiez <code>motion_lab_server.py</code> vers <code>main.py</code> sur la carte (il démarre automatiquement au boot).</p>
+  <pre># Windows (remplacez COM3 par le port de la carte)
 mpremote connect COM3 cp motion_lab_server.py :main.py
 
 # Linux / macOS
-mpremote connect /dev/ttyACM0 cp motion_lab_server.py :main.py</pre>
-  <p>La STeaMi diffuse alors sous le nom <b>STeaMi-Motion</b> (service <code>a9e6f000-…</code>), à 20&nbsp;Hz.</p>
+mpremote connect /dev/ttyACM0 cp motion_lab_server.py :main.py
+
+# Puis redemarrez la carte (reset ou debrancher/rebrancher)
+mpremote connect COM3 reset</pre>
+  <p>La STeaMi diffuse alors sous le nom <b>ExAOlib</b> (service <code>8B9D0001-8D4C-4F3A-9B1A-2C3D4E5F6A7B</code>), à 5&nbsp;Hz. Le BLE démarre même si un capteur est absent.</p>
+  <p class="tag">Note stabilité : le serveur fait une pause de 200&nbsp;ms par itération pour laisser le stack BLE traiter les connexions. Sans cette pause, le smartphone se déconnecte dès la connexion.</p>
 </section>
 
 <section>
   <h2>3. Ouvrir l'application sur Android</h2>
-  <div class="step"><div class="num">1</div><div>Hébergez <code>motion_lab_app.html</code> en <b>HTTPS</b> (GitHub Pages, Netlify, ou tout serveur sécurisé). Le Web Bluetooth exige un contexte sécurisé : une page ouverte en <code>file://</code> ne fonctionnera pas.</div></div>
-  <div class="step"><div class="num">2</div><div>Ouvrez l'URL dans <b>Chrome</b>. Pour un accès hors-ligne, ajoutez la page à l'écran d'accueil (« Ajouter à l'écran d'accueil »).</div></div>
-  <div class="step"><div class="num">3</div><div>Touchez <b>🔗 Connecter</b>, choisissez <b>STeaMi-Motion</b> dans la liste. Les boutons s'activent.</div></div>
-  <div class="step"><div class="num">4</div><div>Fixez la carte sur le chariot, face au mur, puis <b>▶ Démarrer</b>. Les trois courbes se tracent en direct.</div></div>
-  <p>Pas de carte sous la main ? Le bouton <b>🧪 Demo</b> génère des courbes de démonstration pour tester l'interface.</p>
+  <div class="step"><div class="num">1</div><div>Ouvrez l'application hébergée en <b>HTTPS</b> :<br>
+    <code>https://acastanet.github.io/steami-motion-lab/motion_lab_app.html</code><br>
+    Le Web Bluetooth exige un contexte sécurisé : une page ouverte en <code>file://</code> ne fonctionnera pas. Pour un accès hors-ligne, ajoutez la page à l'écran d'accueil (« Ajouter à l'écran d'accueil »).</div></div>
+  <div class="step"><div class="num">2</div><div>Touchez <b>🔗 Connecter</b>, choisissez <b>ExAOlib</b> dans la liste. L'état passe en « connecté ».</div></div>
+  <div class="step"><div class="num">3</div><div>Fixez la carte sur le chariot, face au mur. L'acquisition est déjà en cours (5&nbsp;Hz en continu) : les trois courbes se tracent en direct dès la connexion.</div></div>
+  <div class="step"><div class="num">4</div><div><b>↺ Reset</b> efface les courbes pour repartir d'un tracé propre. <b>⬇ Exporter CSV</b> enregistre la session.</div></div>
+  <p>Pas de carte sous la main ? Le bouton <b>🧪 Demo</b> génère des courbes de démonstration pour tester l'interface, sans la STeaMi.</p>
 </section>
 
 <section>
   <h2>4. Protocole (référence)</h2>
   <table>
     <tr><th>Élément</th><th>UUID</th><th>Rôle</th></tr>
-    <tr><td>Service</td><td><code>a9e6f000-5b8c-4f4a-8b3a-1c2d3e4f5a6b</code></td><td>Motion Lab</td></tr>
-    <tr><td>DATA</td><td><code>a9e6f001-…</code></td><td>lecture + notify : la trame CSV</td></tr>
-    <tr><td>CMD</td><td><code>a9e6f002-…</code></td><td>écriture : <code>START</code> / <code>STOP</code> / <code>RESET</code></td></tr>
-    <tr><td>STATUS</td><td><code>a9e6f003-…</code></td><td>lecture + notify : <code>IDLE</code> / <code>RUN</code></td></tr>
+    <tr><td>Service</td><td><code>8B9D0001-8D4C-4F3A-9B1A-2C3D4E5F6A7B</code></td><td>ExAOlib (Motion Lab)</td></tr>
+    <tr><td>DATA</td><td><code>8B9D0002-…</code></td><td>lecture + notify : trame CSV 15 champs</td></tr>
   </table>
-  <p>Trame NOTIFY (CSV, 20&nbsp;Hz) :</p>
-  <pre>T,dist,ax,ay,az,gx,gy,gz
-# T     : ms depuis le demarrage
-# dist  : mm (-1 si hors portee)
-# ax..az: acceleration (g)
-# gx..gz: rotation (deg/s)</pre>
+  <p>Trame NOTIFY (CSV, 5&nbsp;Hz, 15 champs) :</p>
+  <pre>ax,ay,az,gx,gy,gz,mx,my,mz,dist,press,temp,hum,temp2,lum
+# ax..az : acceleration (g)        gx..gz : rotation (deg/s)
+# mx..mz : magnetometre            dist   : distance ToF (mm)
+# press,temp : WSEN-PADS           hum,temp2 : WSEN-HIDS
+# lum : luminosite (APDS-9960)</pre>
+  <p>L'application <b>Motion Lab</b> utilise uniquement le cœur du MVP (distance + accélération + rotation) :</p>
+  <pre>distance  = champ 10 (dist, mm)
+|a| (g)   = hypot(ax, ay, az)
+|ω| (°/s) = hypot(gx, gy, gz)</pre>
+  <p>Les autres capteurs (magnéto, pression, température, humidité, lumière) sont transmis mais volontairement ignorés par l'interface MVP.</p>
 </section>
 
 <section>
@@ -109,6 +118,6 @@ mpremote connect /dev/ttyACM0 cp motion_lab_server.py :main.py</pre>
 </section>
 
 </main>
-<footer>STeaMi Motion Lab — MVP pédagogique · serveur BLE + Web App Android</footer>
+<footer>STeaMi Motion Lab — MVP pédagogique · serveur BLE (ExAOlib) + Web App Android</footer>
 </body>
 </html>
