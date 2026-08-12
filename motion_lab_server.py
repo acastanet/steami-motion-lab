@@ -95,7 +95,7 @@ def _irq(event, data):
         _connh = None
         _running = False
         _set_status("IDLE")
-        ble.gap_advertise(_ADV_MS, adv)
+        ble.gap_advertise(20000, adv, resp_data=resp)
     elif event == _IRQ_GATTS_WRITE:
         conn, h = data[0], data[1]
         if h == _cmd_handle:
@@ -171,12 +171,15 @@ srv = (_SVC, (
 
 _UUID_STR = "a9e6f000-5b8c-4f4a-8b3a-1c2d3e4f5a6b"
 _le = bytes(reversed(bytes.fromhex(_UUID_STR.replace("-", ""))))
-adv = (b"\x02\x01\x06" + b"\x11\x07" + _le
-       + bytes([len(_NAME) + 1, 0x09]) + _NAME)
+# Advertising data is limited to 31 bytes. Keep it short here
+# (flags + 128-bit service UUID = 21 bytes) and put the full name
+# in the scan response so the Android picker still shows a clear label.
+adv = b"\x02\x01\x06" + b"\x11\x07" + _le
+resp = bytes([len(_NAME) + 1, 0x09]) + _NAME
 
 ble.irq(_irq)
 ble.gatts_write(_status_handle, b"IDLE")
-ble.gap_advertise(_ADV_MS, adv)
+ble.gap_advertise(_ADV_MS, adv, resp_data=resp)
 print("STeaMi Motion Lab - serveur BLE en attente de connexion")
 
 draw((0, 0, 0, 0, 0, 0, 0), "IDLE")
